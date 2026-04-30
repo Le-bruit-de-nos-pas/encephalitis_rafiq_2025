@@ -8,6 +8,9 @@ library(data.table)
 
 Kappa_df <- read_xlsx(path="../data/Kappa_NFL20250721_clean.xlsx", trim_ws = TRUE)
 
+age_df <- read_xlsx(path="../data/codeDDN_IndexKappaNfL.xlsx", trim_ws = TRUE)
+age_df$ddn <- as.Date(age_df$ddn)
+
 Kappa_df$IndeK_clean <- as.numeric(Kappa_df$IndeK_clean)
 Kappa_df$KappaPlasma <- as.numeric(Kappa_df$KappaPlasma)
 Kappa_df$AlbuminPlasma <- as.numeric(Kappa_df$AlbuminPlasma)
@@ -588,6 +591,61 @@ ggsave(file="KappaPlasma_first.svg", plot=to_plot, width=4, height=5)
 
 
 
+library(lubridate)
+
+
+Kappa_df %>% group_by(Code_P) %>% filter(Date_sampling==min(Date_sampling)) %>%
+  select(Code_P, Date_sampling) %>% mutate(Date_sampling=as.Date(Date_sampling)) %>%
+  inner_join(age_df %>% rename("Code_P"="code")) %>%
+    mutate(age = time_length(interval(ddn, Date_sampling ), "years"))  %>%
+    ungroup() %>%
+  summarise(mean=mean(age),
+            sd=sd(age),
+            median=median(age),
+            q1=quantile(age, 0.25),
+            q3=quantile(age,0.75))
+
+
+
+
+Kappa_df <- Kappa_df %>%
+  mutate(elapsed_sympt = time_length(interval(`date symptômes`, Date_sampling ), "days")) %>%
+  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "days")) 
+
+
+
+
+
+to_plot <-  Kappa_df %>% group_by(Code_P) %>% filter(Date_sampling==min(Date_sampling)) %>%
+  select(Code_P, Date_sampling) %>% mutate(Date_sampling=as.Date(Date_sampling)) %>%
+  inner_join(age_df %>% rename("Code_P"="code")) %>%
+    mutate(age = time_length(interval(ddn, Date_sampling ), "years"))  %>%
+    ungroup() %>%
+  ggplot(aes(y=age, x="")) +
+  geom_boxplot( color="#747475", alpha=0, notch = TRUE, width=0.5, linewidth=1.5) +
+  geom_jitter(width=0.2, alpha=0.6, size=2, shape=1, stroke=2, color="#00204D") +
+    labs(x = "First evaluation", 
+       y = "Age baseline (years)\n", 
+       title="Age baseline") +
+   theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position = "right") +
+  theme(panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12, vjust = -0.5),
+        axis.title.y = element_text(size = 12, vjust = -0.5),
+        plot.margin = margin(5, 5, 5, 5, "pt"))
+
+ggsave(file="age_first.svg", plot=to_plot, width=4, height=5)
+
+
+
 # --------------
 
 
@@ -613,16 +671,24 @@ Kappa_df$`Date_sampling`  <- as.Date(Kappa_df$`Date_sampling`  )
 
 library(lubridate)
 
+
+
+age_df <- read_xlsx(path="../data/codeDDN_IndexKappaNfL.xlsx", trim_ws = TRUE)
+age_df$ddn <- as.Date(age_df$ddn)
+
+Kappa_df <- Kappa_df %>% inner_join(age_df %>% rename("Code_P"="code"))
+
+
 Kappa_df <- Kappa_df %>%
   mutate(elapsed_sympt = time_length(interval(`date symptômes`, Date_sampling ), "months")) %>%
-  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months")) 
-
+  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months"))  %>%
+  mutate(age = time_length(interval(ddn, Date_sampling ), "years"))
 
 
 variables_to_track <- c("Code_P",  "IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , "KappaCSF", 
                         "NfL", "Case",  "mRS", "abnormal MRI onset", "néo associé" ,"ICI", 
                         "CSF leuco count" , "CSF prot", "BOC_count" , "CRP" , "Neutrophiles - nb absolu (sang) clean" ,
-                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx")
+                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx", "age")
 
 Kappa_df <- Kappa_df %>% select(all_of(variables_to_track))
 
@@ -643,30 +709,38 @@ results_list <- list()
 for (v in vars_to_test) {
   
   df_sub <- Kappa_df %>% 
-    select(Code_P, Case, all_of(v)) %>% 
+    select(Code_P, Case, age, all_of(v)) %>% 
     drop_na()
   
   if(nrow(df_sub) < 5) next
   
+  df_sub$age <- scale(df_sub$age)
   df_sub$Case_scaled <- scale(df_sub$Case)
   df_sub$Var_scaled  <- scale(df_sub[[v]])
   
   df_sub$Case_rank_scaled <- scale(rank(df_sub$Case))
   df_sub$Var_rank_scaled  <- scale(rank(df_sub[[v]]))
   
-  # Raw model
-  raw_model <- lmer(Case_scaled ~ Var_scaled + (1 | Code_P), data = df_sub)
+  # Age-adjusted models
+  raw_model <- lmer(Case_scaled ~ Var_scaled + age + (1 | Code_P), data = df_sub)
   raw_coef <- summary(raw_model)$coefficients[2, c(1,2,5)]
   
-  # Rank model
-  rank_model <- lmer(Case_rank_scaled ~ Var_rank_scaled + (1 | Code_P), data = df_sub)
+  rank_model <- lmer(Case_rank_scaled ~ Var_rank_scaled + age + (1 | Code_P), data = df_sub)
   rank_coef <- summary(rank_model)$coefficients[2, c(1,2,5)]
   
-  # Rmcorr
+  # Age-adjusted residual rmcorr
+  df_sub <- df_sub %>%
+  group_by(Code_P) %>%
+  mutate(
+    Case_resid = resid(lm(reformulate("age", response = "Case"), data = cur_data())),
+    Var_resid  = resid(lm(reformulate("age", response = v), data = cur_data()))
+  ) %>%
+  ungroup()
+  
   rm <- tryCatch({
     rmcorr(participant = "Code_P",
-           measure1 = "Case",
-           measure2 = v,
+           measure1 = "Case_resid",
+           measure2 = "Var_resid",
            dataset = df_sub)
   }, error = function(e) NULL)
   
@@ -676,7 +750,6 @@ for (v in vars_to_test) {
     rm_vals <- c(r = NA, CI_low = NA, CI_high = NA, p = NA)
   }
   
-  # Store results
   results_list[[v]] <- data.frame(
     Variable = v,
     Raw_Beta = raw_coef[1],
@@ -693,6 +766,7 @@ for (v in vars_to_test) {
     stringsAsFactors = FALSE
   )
 }
+
 
 # Collapse into one table
 results_df <- do.call(rbind, results_list)
@@ -738,30 +812,39 @@ results_list <- list()
 for (v in vars_to_test) {
   
   df_sub <- Kappa_df %>% 
-    select(Code_P, mRS, all_of(v)) %>% 
+    select(Code_P, mRS, age, all_of(v)) %>% 
     drop_na()
   
-  if(nrow(df_sub) < 5) next
+  if (nrow(df_sub) < 5) next
   
+  # Scale variables
+  df_sub$age <- scale(df_sub$age)
   df_sub$mRS_scaled <- scale(df_sub$mRS)
   df_sub$Var_scaled  <- scale(df_sub[[v]])
   
   df_sub$mRS_rank_scaled <- scale(rank(df_sub$mRS))
   df_sub$Var_rank_scaled  <- scale(rank(df_sub[[v]]))
   
-  # Raw model
-  raw_model <- lmer(mRS_scaled ~ Var_scaled + (1 | Code_P), data = df_sub)
+  # --- Age-adjusted mixed models ---
+  raw_model <- lmer(mRS_scaled ~ Var_scaled + age + (1 | Code_P), data = df_sub)
   raw_coef <- summary(raw_model)$coefficients[2, c(1,2,5)]
   
-  # Rank model
-  rank_model <- lmer(mRS_rank_scaled ~ Var_rank_scaled + (1 | Code_P), data = df_sub)
+  rank_model <- lmer(mRS_rank_scaled ~ Var_rank_scaled + age + (1 | Code_P), data = df_sub)
   rank_coef <- summary(rank_model)$coefficients[2, c(1,2,5)]
   
-  # Rmcorr
+  # --- Age-adjusted residuals for repeated-measures correlation ---
+  df_sub <- df_sub %>%
+    group_by(Code_P) %>%
+    mutate(
+      mRS_resid = resid(lm(reformulate("age", response = "mRS"), data = cur_data())),
+      Var_resid = resid(lm(reformulate("age", response = v), data = cur_data()))
+    ) %>%
+    ungroup()
+  
   rm <- tryCatch({
     rmcorr(participant = "Code_P",
-           measure1 = "mRS",
-           measure2 = v,
+           measure1 = "mRS_resid",
+           measure2 = "Var_resid",
            dataset = df_sub)
   }, error = function(e) NULL)
   
@@ -771,7 +854,7 @@ for (v in vars_to_test) {
     rm_vals <- c(r = NA, CI_low = NA, CI_high = NA, p = NA)
   }
   
-  # Store results
+  # --- Store results ---
   results_list[[v]] <- data.frame(
     Variable = v,
     Raw_Beta = raw_coef[1],
@@ -788,6 +871,8 @@ for (v in vars_to_test) {
     stringsAsFactors = FALSE
   )
 }
+
+
 
 # Collapse into one table
 results_df <- do.call(rbind, results_list)
@@ -817,12 +902,12 @@ Kappa_df
 
 
 
-
+Kappa_df$age
 
 names(Kappa_df)
 
-target_var <- "elapsed_sympt"
-label <- "Disease duration"
+target_var <- "age"
+label <- "Age (years)"
 
 to_plot <- Kappa_df %>% # mutate(elapsed_sympt=elapsed_sympt/30.44) %>%
   select(all_of(c(target_var, "Case", "mRS"))) %>%
@@ -885,7 +970,7 @@ vars <- Kappa_df %>%
 
 cor_results <- map_dfr(vars, function(var) {
   df <- Kappa_df %>%
-    select(mRS, !!sym(var)) %>%
+    select(Case, !!sym(var)) %>%
     drop_na()
   
   # Compute 5% and 95% quantiles for the variable
@@ -897,7 +982,7 @@ cor_results <- map_dfr(vars, function(var) {
     filter(df[[var]] >= q_low & df[[var]] <= q_high)
   
   # Run Spearman correlation on trimmed data
-  test <- cor.test(df_trimmed$mRS, df_trimmed[[var]], method = "spearman")
+  test <- cor.test(df_trimmed$Case, df_trimmed[[var]], method = "spearman")
   
   tibble(
     Variable = var,
@@ -921,26 +1006,26 @@ data.frame(cor_results)
 variables <- c(
   "κ FLC Index", "κ FLC Plasma", "Albumin Plasma", "Albumin CSF", "κ FLC CSF",
   "NfL", "CASE/mRS", "Abnormal MRI", "Neoplasia", "ICI", "Leuko CSF", "CSF Protein",
-  "OCB count", "CRP", "Neutrophiles", "Lymphocytes", "NLR", "Symptom duration", "Diagnosis duration"
+  "OCB count", "CRP", "age", "Neutrophiles", "Lymphocytes", "NLR", "Symptom duration", "Diagnosis duration"
 )
 
 case_corr <- c(
   0.03833395 , 0.08433665, -0.19190672 , 0.18753894 , 0.24460075 ,
   0.22547683 , 0.71201251 , 0.08834478 , 0.18806050 , 0.21956403 , 0.02921881 , 0.19970999 ,
-  0.42053507 , 0.02058906 , 0.11301147 , -0.15598102 , 0.14754256 , -0.20242644 , -0.17180055 
+  0.42053507 , 0.02058906 , -0.07737926, 0.11301147 , -0.15598102 , 0.14754256 , -0.20242644 , -0.17180055 
 )
 
 mrs_corr <- c(
   0.13544338 , 0.03127982 , -0.28511294 , 0.03461965 , 0.27831722 ,
   0.34853861 , 0.65876671 , 0.16194733 , 0.26927762 , 0.27889101 , 0.03847854 , 0.10370737 ,
-  0.39751244 , -0.12801217 , 0.10217663 , -0.03492053 , 0.01254586 , -0.30453936 , -0.23976206 
+  0.39751244 , -0.12801217 , -0.12097114,  0.10217663 , -0.03492053 , 0.01254586 , -0.30453936 , -0.23976206 
 )
 
 # Adjust variable names for display in plot (short, R-friendly)
 plot_vars <- c(
   "κ FLC Index", "κ FLC Plasma", "Albumin Plasma", "Albumin CSF",
   "κ FLC CSF", "NfL", "CASE/mRS", "Abnormal MRI", "Neoplasia", "ICI",
-  "Leuko CSF", "CSF Protein", "OCB count", "CRP", "Neutrophiles", "Lymphocytes",
+  "Leuko CSF", "CSF Protein", "OCB count", "CRP", "age", "Neutrophiles", "Lymphocytes",
   "NLR", "Symptom duration", "Diagnosis duration"
 )
 
@@ -972,6 +1057,8 @@ ggsave(file="correlations.svg", plot=to_plot, width=10, height=2)
 # Predict future/next CASE/mRS/Global Clinician appreciation -----------
 
 
+age_df <- read_xlsx(path="../data/codeDDN_IndexKappaNfL.xlsx", trim_ws = TRUE)
+age_df$ddn <- as.Date(age_df$ddn)
 
 Kappa_df <- read_xlsx(path="../data/Kappa_NFL20250721_clean.xlsx", trim_ws = TRUE)
 
@@ -994,17 +1081,17 @@ Kappa_df$`Date_sampling`  <- as.Date(Kappa_df$`Date_sampling`  )
 library(lubridate)
 
 Kappa_df <- Kappa_df %>%
+   inner_join(age_df %>% rename("Code_P"="code")) %>%
+    mutate(age = time_length(interval(ddn, Date_sampling ), "years"))  %>%
   mutate(elapsed_sympt = time_length(interval(`date symptômes`, Date_sampling ), "months")) %>%
-  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months"))  %>%
   mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months"))  
-
 
 names(Kappa_df)
 
 variables_to_track <- c("Code_P",  "IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , "KappaCSF", 
                         "NfL", "Case",  "mRS",  "Date_sampling",
                         "CSF leuco count" , "CSF prot", "BOC_count" , "CRP" , "Neutrophiles - nb absolu (sang) clean" ,
-                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "Statut clinique")
+                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "Statut clinique", "age")
 
 Kappa_df <- Kappa_df %>% select(all_of(variables_to_track))
 
@@ -1025,12 +1112,12 @@ library(tidyr)
 # Outcome can be "Case" or "mRS"
 outcome_var <- "Case"
 
-# Function to fit lagged models
+# Function to fit lagged models with age adjustment
 fit_lagged_models <- function(df, outcome_var, covariates, scale_data = TRUE) {
   
   df <- df %>% arrange(Code_P, Date_sampling)
   
-  # create lagged outcome
+  # Create lagged outcome
   df <- df %>%
     group_by(Code_P) %>%
     mutate(lag_outcome = lag(!!sym(outcome_var))) %>%
@@ -1042,26 +1129,27 @@ fit_lagged_models <- function(df, outcome_var, covariates, scale_data = TRUE) {
       group_by(Code_P) %>%
       mutate(!!paste0("lag_", var) := lag(!!sym(var))) %>%
       ungroup() %>%
-      drop_na(lag_outcome, !!sym(paste0("lag_", var))) # remove NAs
+      drop_na(lag_outcome, !!sym(paste0("lag_", var)), age)  # ensure no missing age values
     
-    # Optionally scale the lagged covariate (and outcome if needed)
+    # Optionally scale lagged variables and age
     if (scale_data) {
       df_lag <- df_lag %>%
         mutate(
           !!paste0("lag_", var) := as.numeric(scale(!!sym(paste0("lag_", var)))),
-          lag_outcome = as.numeric(scale(lag_outcome))
+          lag_outcome = as.numeric(scale(lag_outcome)),
+          age = as.numeric(scale(age))
         )
     }
     
-    # Unadjusted model
+    # --- Unadjusted model (still includes age) ---
     model_unadj <- lmer(
-      formula(paste0(outcome_var, " ~ lag_", var, " + (1 | Code_P)")),
+      formula(paste0(outcome_var, " ~ lag_", var, " + age + (1 | Code_P)")),
       data = df_lag
     )
     
-    # Adjusted model (lagged outcome)
+    # --- Adjusted model (including lagged outcome + age) ---
     model_adj <- lmer(
-      formula(paste0(outcome_var, " ~ lag_outcome + lag_", var, " + (1 | Code_P)")),
+      formula(paste0(outcome_var, " ~ lag_outcome + lag_", var, " + age + (1 | Code_P)")),
       data = df_lag
     )
     
@@ -1081,32 +1169,31 @@ fit_lagged_models <- function(df, outcome_var, covariates, scale_data = TRUE) {
 }
 
 # Run for selected variables
-covariates_to_test <- c("IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , 
-                        "KappaCSF", "NfL", "BOC_count" , "CRP", "CSF_leuco_count" , "CSF_prot", 
-                        "Neutrophiles" ,
-                        "Lymphocytes" , "NLR")
+covariates_to_test <- c("IndeK_clean", "KappaPlasma", "AlbuminPlasma", "AlbuminCSF", 
+                        "KappaCSF", "NfL", "BOC_count", "CRP", "CSF_leuco_count", "CSF_prot",
+                        "Neutrophiles", "Lymphocytes", "NLR")
 
 lagged_results <- fit_lagged_models(Kappa_df, outcome_var, covariates_to_test)
 
 lagged_results
 
 
+
 #    Covariate       Unadj_Estimate Unadj_SE Unadj_p Adj_Estimate Adj_SE  Adj_p
 #    <chr>                    <dbl>    <dbl>   <dbl>        <dbl>  <dbl>  <dbl>
-#  1 IndeK_clean            -0.0529    0.236  0.823        0.291   0.124 0.0217
-#  2 KappaPlasma             0.0866    0.396  0.828        0.128   0.221 0.563 
-#  3 AlbuminPlasma           0.0371    0.229  0.872        0.0172  0.132 0.897 
-#  4 AlbuminCSF             -0.208     0.327  0.528       -0.185   0.128 0.154 
-#  5 KappaCSF                0.507     0.347  0.148        0.462   0.222 0.0404
-#  6 NfL                     0.654     0.339  0.0578       0.266   0.233 0.258 
-#  7 BOC_count               0.239     0.201  0.239        0.273   0.136 0.0485
-#  8 CRP                     0.327     0.280  0.247        0.0812  0.130 0.535 
-#  9 CSF_leuco_count         0.156     0.197  0.431        0.198   0.172 0.253 
-# 10 CSF_prot                0.224     0.270  0.410       -0.176   0.144 0.226 
-# 11 Neutrophiles            0.673     0.426  0.119        0.0501  0.271 0.854 
-# 12 Lymphocytes             0.317     0.453  0.487        0.329   0.261 0.211 
-# 13 NLR                     0.163     0.419  0.698       -0.235   0.271 0.390
-
+#  1 IndeK_clean            -0.0625    0.237  0.793        0.288   0.124 0.0228
+#  2 KappaPlasma             0.129     0.404  0.750        0.123   0.228 0.591 
+#  3 AlbuminPlasma           0.0266    0.231  0.909       -0.0323  0.139 0.817 
+#  4 AlbuminCSF             -0.193     0.331  0.563       -0.161   0.132 0.225 
+#  5 KappaCSF                0.516     0.348  0.143        0.461   0.224 0.0430
+#  6 NfL                     0.653     0.340  0.0591       0.264   0.235 0.266 
+#  7 BOC_count               0.232     0.200  0.252        0.269   0.136 0.0518
+#  8 CRP                     0.316     0.282  0.267        0.0869  0.130 0.507 
+#  9 CSF_leuco_count         0.155     0.197  0.435        0.198   0.171 0.252 
+# 10 CSF_prot                0.168     0.274  0.541       -0.151   0.147 0.310 
+# 11 Neutrophiles            0.694     0.429  0.111        0.0391  0.275 0.887 
+# 12 Lymphocytes             0.289     0.462  0.533        0.366   0.268 0.176 
+# 13 NLR                     0.198     0.424  0.642       -0.261   0.277 0.349 
 
 
 
@@ -1115,12 +1202,12 @@ lagged_results
 # Outcome can be "Case" or "mRS"
 outcome_var <- "mRS"
 
-# Function to fit lagged models
-fit_lagged_models <- function(df, outcome_var, covariates, scale_data=TRUE) {
+# Function to fit lagged models (age-adjusted)
+fit_lagged_models <- function(df, outcome_var, covariates, scale_data = TRUE) {
   
   df <- df %>% arrange(Code_P, Date_sampling)
   
-  # create lagged outcome
+  # Create lagged outcome
   df <- df %>%
     group_by(Code_P) %>%
     mutate(lag_outcome = lag(!!sym(outcome_var))) %>%
@@ -1132,28 +1219,27 @@ fit_lagged_models <- function(df, outcome_var, covariates, scale_data=TRUE) {
       group_by(Code_P) %>%
       mutate(!!paste0("lag_", var) := lag(!!sym(var))) %>%
       ungroup() %>%
-      drop_na(lag_outcome, !!sym(paste0("lag_", var)))  # remove NAs
+      drop_na(lag_outcome, !!sym(paste0("lag_", var)), age)  # ensure no missing age values
     
-    # Optionally scale the lagged covariate (and outcome if needed)
+    # Optionally scale lagged covariate, outcome, and age
     if (scale_data) {
       df_lag <- df_lag %>%
         mutate(
           !!paste0("lag_", var) := as.numeric(scale(!!sym(paste0("lag_", var)))),
-          lag_outcome = as.numeric(scale(lag_outcome))
+          lag_outcome = as.numeric(scale(lag_outcome)),
+          age = as.numeric(scale(age))
         )
     }
     
-
-    
-    # Unadjusted model
+    # --- Age-adjusted unadjusted model (includes age as covariate) ---
     model_unadj <- lmer(
-      formula(paste0(outcome_var, " ~ lag_", var, " + (1 | Code_P)")),
+      formula(paste0(outcome_var, " ~ lag_", var, " + age + (1 | Code_P)")),
       data = df_lag
     )
     
-    # Adjusted model (lagged outcome)
+    # --- Age-adjusted adjusted model (includes lagged outcome + age) ---
     model_adj <- lmer(
-      formula(paste0(outcome_var, " ~ lag_outcome + lag_", var, " + (1 | Code_P)")),
+      formula(paste0(outcome_var, " ~ lag_outcome + lag_", var, " + age + (1 | Code_P)")),
       data = df_lag
     )
     
@@ -1166,39 +1252,37 @@ fit_lagged_models <- function(df, outcome_var, covariates, scale_data=TRUE) {
       Adj_SE         = summary(model_adj)$coefficients[3,2],
       Adj_p          = summary(model_adj)$coefficients[3,5]
     )
-    
   })
   
   return(results)
 }
 
-# Run for selected variables
-covariates_to_test <- c("IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , 
-                        "KappaCSF", "NfL", "BOC_count" , "CRP", "CSF_leuco_count" , "CSF_prot", 
-                        "Neutrophiles" ,
-                        "Lymphocytes" , "NLR")
+# Example: run for selected biomarkers
+covariates_to_test <- c("IndeK_clean", "KappaPlasma", "AlbuminPlasma", "AlbuminCSF",
+                        "KappaCSF", "NfL", "BOC_count", "CRP", "CSF_leuco_count",
+                        "CSF_prot", "Neutrophiles", "Lymphocytes", "NLR")
 
-lagged_results <- fit_lagged_models(Kappa_df, outcome_var, covariates_to_test)
+lagged_results_mRS <- fit_lagged_models(Kappa_df, outcome_var, covariates_to_test)
 
-
-lagged_results
+lagged_results_mRS
 
 
-#    Covariate       Unadj_Estimate Unadj_SE Unadj_p Adj_Estimate Adj_SE     Adj_p
-#    <chr>                    <dbl>    <dbl>   <dbl>        <dbl>  <dbl>     <dbl>
-#  1 IndeK_clean            0.0261    0.0653   0.692      0.234   0.0525 0.0000268
-#  2 KappaPlasma            0.00293   0.0811   0.971      0.156   0.0644 0.0179   
-#  3 AlbuminPlasma          0.0182    0.0607   0.766     -0.0358  0.0631 0.572    
-#  4 AlbuminCSF             0.00691   0.0894   0.939     -0.0517  0.0713 0.471    
-#  5 KappaCSF               0.0332    0.0600   0.583      0.179   0.0574 0.00262  
-#  6 NfL                    0.0249    0.0548   0.652      0.0477  0.0615 0.441    
-#  7 BOC_count              0.0101    0.0566   0.860      0.191   0.0599 0.00204  
-#  8 CRP                    0.136     0.106    0.204      0.00878 0.0579 0.880    
-#  9 CSF_leuco_count        0.0846    0.0559   0.139      0.0992  0.0580 0.0927   
-# 10 CSF_prot              -0.0166    0.0831   0.843     -0.0342  0.0738 0.645    
-# 11 Neutrophiles           0.0824    0.0800   0.310     -0.0194  0.0712 0.786    
-# 12 Lymphocytes            0.0852    0.0959   0.379      0.0760  0.0685 0.271    
-# 13 NLR                   -0.0279    0.0706   0.696     -0.0714  0.0689 0.304  
+
+# Covariate       Unadj_Estimate Unadj_SE Unadj_p Adj_Estimate Adj_SE     Adj_p
+# <chr>                    <dbl>    <dbl>   <dbl>        <dbl>  <dbl>     <dbl>
+#   1 IndeK_clean            0.0250    0.0656   0.705       0.233  0.0529 0.0000322
+# 2 KappaPlasma            0.00131   0.0816   0.987       0.162  0.0661 0.0168   
+# 3 AlbuminPlasma          0.0194    0.0609   0.752      -0.0451 0.0651 0.491    
+# 4 AlbuminCSF             0.00680   0.0901   0.940      -0.0471 0.0739 0.527    
+# 5 KappaCSF               0.0321    0.0600   0.596       0.178  0.0577 0.00290  
+# 6 NfL                    0.0241    0.0549   0.663       0.0475 0.0616 0.444    
+# 7 BOC_count              0.00987   0.0567   0.863       0.189  0.0601 0.00237  
+# 8 CRP                    0.133     0.107    0.217       0.0101 0.0588 0.865    
+# 9 CSF_leuco_count        0.0857    0.0560   0.134       0.0990 0.0581 0.0939   
+# 10 CSF_prot              -0.0223    0.0836   0.791      -0.0305 0.0764 0.691    
+# 11 Neutrophiles           0.0801    0.0801   0.325      -0.0228 0.0718 0.752    
+# 12 Lymphocytes            0.0938    0.0968   0.338       0.0858 0.0699 0.225    
+# 13 NLR                   -0.0311    0.0708   0.664      -0.0783 0.0696 0.265    
 
 
 
@@ -1754,6 +1838,11 @@ ggsave(file="mRS_deltas_over_time.svg", plot=to_plot, width=5, height=5)
 # XGBoost CASE --------------
 Kappa_df <- read_xlsx(path="../data/Kappa_NFL20250721_clean.xlsx", trim_ws = TRUE)
 
+
+age_df <- read_xlsx(path="../data/codeDDN_IndexKappaNfL.xlsx", trim_ws = TRUE)
+age_df$ddn <- as.Date(age_df$ddn)
+
+
 Kappa_df$IndeK_clean <- as.numeric(Kappa_df$IndeK_clean)
 Kappa_df$KappaPlasma <- as.numeric(Kappa_df$KappaPlasma)
 Kappa_df$AlbuminPlasma <- as.numeric(Kappa_df$AlbuminPlasma)
@@ -1772,16 +1861,19 @@ Kappa_df$`Date_sampling`  <- as.Date(Kappa_df$`Date_sampling`  )
 
 library(lubridate)
 
+
 Kappa_df <- Kappa_df %>%
+   inner_join(age_df %>% rename("Code_P"="code")) %>%
+    mutate(age = time_length(interval(ddn, Date_sampling ), "years"))  %>%
   mutate(elapsed_sympt = time_length(interval(`date symptômes`, Date_sampling ), "months")) %>%
-  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months")) 
+  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months"))  
 
 
 
 variables_to_track <- c("Code_P",  "IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , "KappaCSF", 
                         "NfL", "Case",  "mRS", "abnormal MRI onset", "néo associé" ,"ICI", 
                         "CSF leuco count" , "CSF prot", "BOC_count" , "CRP" , "Neutrophiles - nb absolu (sang) clean" ,
-                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx")
+                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx", "age")
 
 Kappa_df <- Kappa_df %>% select(all_of(variables_to_track))
 
@@ -1847,50 +1939,51 @@ for (fold in 1:10) {
 }
 
 
-#rmse_cv <- y %>% bind_cols(preds_full) %>% filter(`...1`<20& `...2`<20)
+rmse_cv <- y %>% bind_cols(preds_full) %>% filter(`...1`<20& `...2`<20)
 
 # Calculate RMSE on all samples
-#error <- sqrt(mean((rmse_cv$`...1` - rmse_cv$`...2`)^2))
-#print(paste("10-fold CV RMSE:", error))
+error <- sqrt(mean((rmse_cv$`...1` - rmse_cv$`...2`)^2))
+print(paste("10-fold CV RMSE:", error))
 
 
 
 # Plot observed vs predicted for all samples
-#plot_df <- data.frame(observed = rmse_cv$`...1`, predicted = rmse_cv$`...2`)
+plot_df <- data.frame(observed = rmse_cv$`...1`, predicted = rmse_cv$`...2`)
 
 
 
 
 #plot_df_inc <- plot_df %>% mutate(group="Including Prev mRS|CASE")
 
-#plot_df_exc <- plot_df %>% mutate(group="Excluding Prev mRS|CASE")
+
+plot_df_exc <- plot_df %>% mutate(group="Excluding Prev mRS|CASE")
 
 
-# to_plot <- plot_df_inc %>% bind_rows(plot_df_exc) %>%
-#   ggplot(aes(observed, predicted, colour=group, fill=group)) +
-#   geom_jitter(width=0.2, alpha=0.5, size=1.5, shape=1, stroke=2) +
-#   geom_smooth(method = "lm", se = FALSE) +
-#   coord_cartesian(xlim = c(0, 15), ylim = c(0, 15)) +
-#   scale_colour_manual(values=c("#00204D", "firebrick")) +
-#   scale_fill_manual(values=c("#00204D", "firebrick")) +
-#   labs(title = "",
-#        x = "\n Observed Future CASE Score", y = "Predicted Future CASE Score \n") +
-#   theme(axis.text.y = element_blank(),
-#         axis.ticks.y = element_blank(),
-#         legend.position = "right") +
-#   theme(panel.background = element_blank(),
-#         panel.grid.major = element_blank(),
-#         panel.grid.minor = element_blank(),
-#         strip.background = element_blank(),
-#         strip.text = element_blank(),
-#         axis.line = element_blank(),
-#         axis.text.x = element_text(size = 10),
-#         axis.text.y = element_text(size = 10),
-#         axis.title.x = element_text(size = 12, vjust = -0.5),
-#         axis.title.y = element_text(size = 12, vjust = -0.5),
-#         plot.margin = margin(5, 5, 5, 5, "pt"))
-# 
-# ggsave(file="xgboost.svg", plot=to_plot, width=7, height=5)
+to_plot <- plot_df_inc %>% bind_rows(plot_df_exc) %>%
+  ggplot(aes(observed, predicted, colour=group, fill=group)) +
+  geom_jitter(width=0.2, alpha=0.5, size=1.5, shape=1, stroke=2) +
+  geom_smooth(method = "lm", se = FALSE) +
+  coord_cartesian(xlim = c(0, 15), ylim = c(0, 15)) +
+  scale_colour_manual(values=c("#00204D", "firebrick")) +
+  scale_fill_manual(values=c("#00204D", "firebrick")) +
+  labs(title = "",
+       x = "\n Observed Future CASE Score", y = "Predicted Future CASE Score \n") +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position = "right") +
+  theme(panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title.x = element_text(size = 12, vjust = -0.5),
+        axis.title.y = element_text(size = 12, vjust = -0.5),
+        plot.margin = margin(5, 5, 5, 5, "pt"))
+
+ggsave(file="xgboost.svg", plot=to_plot, width=7, height=5)
 
 
 
@@ -1935,6 +2028,10 @@ ggsave(file="xgboost_im_inc.svg", plot=to_plot, width=5, height=5)
 # XGBoost mRS --------------
 Kappa_df <- read_xlsx(path="../data/Kappa_NFL20250721_clean.xlsx", trim_ws = TRUE)
 
+
+age_df <- read_xlsx(path="../data/codeDDN_IndexKappaNfL.xlsx", trim_ws = TRUE)
+age_df$ddn <- as.Date(age_df$ddn)
+
 Kappa_df$IndeK_clean <- as.numeric(Kappa_df$IndeK_clean)
 Kappa_df$KappaPlasma <- as.numeric(Kappa_df$KappaPlasma)
 Kappa_df$AlbuminPlasma <- as.numeric(Kappa_df$AlbuminPlasma)
@@ -1954,15 +2051,17 @@ Kappa_df$`Date_sampling`  <- as.Date(Kappa_df$`Date_sampling`  )
 library(lubridate)
 
 Kappa_df <- Kappa_df %>%
+   inner_join(age_df %>% rename("Code_P"="code")) %>%
+    mutate(age = time_length(interval(ddn, Date_sampling ), "years"))  %>%
   mutate(elapsed_sympt = time_length(interval(`date symptômes`, Date_sampling ), "months")) %>%
-  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months")) 
+  mutate(elapsed_dx = time_length(interval(`date dg (T0)`, Date_sampling ), "months"))  
 
 
 
 variables_to_track <- c("Code_P",  "IndeK_clean", "KappaPlasma", "AlbuminPlasma" , "AlbuminCSF" , "KappaCSF", 
                         "NfL", "Case",  "mRS", "abnormal MRI onset", "néo associé" ,"ICI", 
                         "CSF leuco count" , "CSF prot", "BOC_count" , "CRP" , "Neutrophiles - nb absolu (sang) clean" ,
-                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx")
+                        "Lymphocytes - nb absolu (sang) clean" , "NLR", "elapsed_sympt", "elapsed_dx", "age")
 
 Kappa_df <- Kappa_df %>% select(all_of(variables_to_track))
 
@@ -1983,7 +2082,7 @@ Kappa_df <- Kappa_df %>% rename("Leukocytes CSF"="CSF leuco count") %>%
 
 
 Kappa_df <- Kappa_df %>% group_by(Code_P) %>% mutate(future_mRS=lead(mRS)) %>% ungroup() %>%
-  select(-elapsed_dx, -elapsed_sympt, -Code_P, -mRS, -Case) %>%
+  select(-elapsed_dx, -elapsed_sympt, -Code_P, mRS, Case) %>%
   filter(!is.na(future_mRS))
 
 
@@ -2043,9 +2142,9 @@ plot_df <- data.frame(observed = rmse_cv$`...1`, predicted = rmse_cv$`...2`)
 
 
 
-#plot_df_inc <- plot_df %>% mutate(group="Including Prev mRS|CASE")
+plot_df_inc <- plot_df %>% mutate(group="Including Prev mRS|CASE")
 
-plot_df_exc <- plot_df %>% mutate(group="Excluding Prev mRS|CASE")
+#plot_df_exc <- plot_df %>% mutate(group="Excluding Prev mRS|CASE")
 
 
 to_plot <- plot_df_inc %>% bind_rows(plot_df_exc) %>%
@@ -2091,7 +2190,7 @@ to_plot <- importance %>%
   arrange(Importance) %>%
   mutate(Feature=factor(Feature, levels=Feature)) %>%
   ggplot(aes(Feature, Importance)) +
-  geom_col(fill="#00204D", colour="#00204D", alpha=0.8) +
+  geom_col(fill="firebrick", colour="firebrick", alpha=0.8) +
   coord_flip() +
   theme(axis.text.y = element_blank(),
         axis.ticks.y = element_blank(),
